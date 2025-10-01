@@ -1,4 +1,4 @@
-import sys
+import click
 import time
 import requests
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +14,7 @@ CENTER_OFFSET_X = 0
 CENTER_OFFSET_Y = 32
 
 
-def combine_images(block_radius: int, step: int, debug: bool = False) -> None:
+def combine_images(radius: int, step: int, debug: bool = False) -> None:
     image_files: List[str] = glob.glob('output/*_*.jpg')
     if not image_files:
         print("No images to combine.")
@@ -37,38 +37,34 @@ def combine_images(block_radius: int, step: int, debug: bool = False) -> None:
         image: Image.Image = Image.open(image_file)
         full_image.paste(image, (128 * (x - min_x), 128 * (max_y - y)))
 
-    size = calculate_params_from_block_radius(block_radius, step)
+    size = calculate_tile_radius(radius, step)
     center_tile_x = size // step
     center_tile_y = size // step
 
-    # Check if the center tile exists before trying to draw the marker
-    if f'{center_tile_x}_{center_tile_y}.jpg' in [os.path.basename(f) for f in image_files]:
-        center_pixel_x = 128 * (center_tile_x - min_x) + CENTER_OFFSET_X
-        center_pixel_y = 128 * (max_y - center_tile_y) + CENTER_OFFSET_Y
+    center_pixel_x = 128 * (center_tile_x - min_x) + CENTER_OFFSET_X
+    center_pixel_y = 128 * (max_y - center_tile_y) + CENTER_OFFSET_Y
 
-        # Define the bounding box of the square
-        x0 = center_pixel_x - block_radius
-        y0 = center_pixel_y - block_radius
-        x1 = center_pixel_x + block_radius
-        y1 = center_pixel_y + block_radius
+    # Define the bounding box of the square
+    x0 = center_pixel_x - radius
+    y0 = center_pixel_y - radius
+    x1 = center_pixel_x + radius
+    y1 = center_pixel_y + radius
 
-        if debug:
-            draw = ImageDraw.Draw(full_image)
-            # Draw the rectangle
-            draw.rectangle([x0, y0, x1, y1], outline='red', width=1)
-            # Draw the center coordinates
-            text = f"({center_pixel_x}, {center_pixel_y})"
-            draw.text((center_pixel_x + 5, center_pixel_y), text, fill='red')
-            # Draw cyan crosshair
-            draw.line([center_pixel_x - 5, center_pixel_y,
-                      center_pixel_x + 5, center_pixel_y], fill='cyan', width=1)
-            draw.line([center_pixel_x, center_pixel_y - 5,
-                      center_pixel_x, center_pixel_y + 5], fill='cyan', width=1)
-        else:
-            # Crop the image to the bounding box
-            full_image = full_image.crop((x0, y0, x1, y1))
+    if debug:
+        draw = ImageDraw.Draw(full_image)
+        # Draw the rectangle
+        draw.rectangle([x0, y0, x1, y1], outline='red', width=1)
+        # Draw the center coordinates
+        text = f"({center_pixel_x}, {center_pixel_y})"
+        draw.text((center_pixel_x + 5, center_pixel_y), text, fill='red')
+        # Draw cyan crosshair
+        draw.line([center_pixel_x - 5, center_pixel_y,
+                   center_pixel_x + 5, center_pixel_y], fill='cyan', width=1)
+        draw.line([center_pixel_x, center_pixel_y - 5,
+                   center_pixel_x, center_pixel_y + 5], fill='cyan', width=1)
     else:
-        print("Center tile not found, skipping radius marker.")
+        # Crop the image to the bounding box
+        full_image = full_image.crop((x0, y0, x1, y1))
 
     file_name = get_file_name('full_image', 'png')
     print(f"Saving {file_name}")
@@ -129,54 +125,49 @@ def delete_small_files(folder_path: str) -> None:
             os.remove(filepath)
 
 
-def calculate_params_from_block_radius(block_radius: int, step: int) -> int:
+def calculate_tile_radius(block_radius: int, step: int) -> int:
     """Calculates size and offset from a desired block radius from (0,0)."""
     tile_radius = math.ceil(block_radius / blocks_per_tile)
     # Scale the radius by the step to ensure the range covers the full area
     return tile_radius * step
 
 
-if __name__ == "__main__":
-    url = "http://play.warpedsmp.com:25572"
-
-    block_radius = 3000  # How many blocks from 0,0 to download
+@click.command()
+@click.argument("url")
+@click.argument("radius", type=int)
+@click.option("-d", "--delete-existing", "delete_existing", is_flag=True, help="Delete existing images.")
+@click.option("-c", "--delete-small", "delete_small", is_flag=True, help="Delete small files.")
+@click.option("-s", "--skip-download", "skip_download", is_flag=True, help="Skip downloading images.")
+@click.option("-f", "--combine", is_flag=True, help="Combine images.")
+@click.option("--debug", is_flag=True, help="Draw debug information on the combined image.")
+def main(url: str, radius: int, delete_existing: bool, delete_small: bool, skip_download: bool, combine: bool, debug: bool) -> None:
     step = 4
-    size = calculate_params_from_block_radius(block_radius, step)
-
+    size = calculate_tile_radius(radius, step)
     start_time = time.time()
-    args = sys.argv[1:]
-    debug_mode = "--debug" in args
 
-    if "--help" in args:
-        print(
-            "Usage: python dynmap_download.py [-d] [-c] [-s] [-f] [--find-center] [--debug]")
-        print("Options:")
-        print("  -d: Delete existing images")
-        print("  -c: Delete small files")
-        print("  -s: Skip downloading images")
-        print("  -f: Combine images")
-        print("  --debug: Draw debug information on the combined image.")
-        sys.exit()
-
-    if "-d" in args:    # Delete existing images
+    if delete_existing:
         files = glob.glob('output/*_*.jpg')
         for f in files:
             if os.path.isfile(f):
                 os.remove(f)
         print("Deleted existing images.")
 
-    if "-c" in args:    # Delete small files
+    if delete_small:
         delete_small_files("output")
 
-    if not "-s" in args:   # Skip downloading
+    if not skip_download:
         print(f"Downloading {image_count(size, step)} images.")
         download_images(url, size, step)
         print("Done downloading images. Took %.2f seconds." %
               (time.time() - start_time))
 
-    if "-f" in args:    # Combine images
+    if combine:
         print("Combining images.")
         start_time = time.time()
-        combine_images(block_radius, step, debug=debug_mode)
+        combine_images(radius, step, debug=debug)
         print("Done combining images. Took %.2f seconds." %
               (time.time() - start_time))
+
+
+if __name__ == "__main__":
+    main()
