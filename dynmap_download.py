@@ -2,7 +2,7 @@ import sys
 import time
 import requests
 from concurrent.futures import ThreadPoolExecutor
-from PIL import Image
+from PIL import Image, ImageDraw
 from typing import List
 import glob
 import os
@@ -10,9 +10,15 @@ import math
 
 blocks_per_tile = 128
 
+CENTER_OFFSET_X = 0
+CENTER_OFFSET_Y = 32
 
-def combine_images() -> None:
+
+def combine_images(block_radius: int, step: int, debug: bool = False) -> None:
     image_files: List[str] = glob.glob('output/*_*.jpg')
+    if not image_files:
+        print("No images to combine.")
+        return
     x_values: List[int] = [int(os.path.splitext(os.path.basename(image))[
                                0].split('_')[0]) for image in image_files]
     y_values: List[int] = [int(os.path.splitext(os.path.basename(image))[
@@ -30,6 +36,40 @@ def combine_images() -> None:
             os.path.basename(image_file))[0].split('_')[1])
         image: Image.Image = Image.open(image_file)
         full_image.paste(image, (128 * (x - min_x), 128 * (max_y - y)))
+
+    size = calculate_params_from_block_radius(block_radius, step)
+    center_tile_x = size // step
+    center_tile_y = size // step
+
+    # Check if the center tile exists before trying to draw the marker
+    if f'{center_tile_x}_{center_tile_y}.jpg' in [os.path.basename(f) for f in image_files]:
+        center_pixel_x = 128 * (center_tile_x - min_x) + CENTER_OFFSET_X
+        center_pixel_y = 128 * (max_y - center_tile_y) + CENTER_OFFSET_Y
+
+        # Define the bounding box of the square
+        x0 = center_pixel_x - block_radius
+        y0 = center_pixel_y - block_radius
+        x1 = center_pixel_x + block_radius
+        y1 = center_pixel_y + block_radius
+
+        if debug:
+            draw = ImageDraw.Draw(full_image)
+            # Draw the rectangle
+            draw.rectangle([x0, y0, x1, y1], outline='red', width=1)
+            # Draw the center coordinates
+            text = f"({center_pixel_x}, {center_pixel_y})"
+            draw.text((center_pixel_x + 5, center_pixel_y), text, fill='red')
+            # Draw cyan crosshair
+            draw.line([center_pixel_x - 5, center_pixel_y,
+                      center_pixel_x + 5, center_pixel_y], fill='cyan', width=1)
+            draw.line([center_pixel_x, center_pixel_y - 5,
+                      center_pixel_x, center_pixel_y + 5], fill='cyan', width=1)
+        else:
+            # Crop the image to the bounding box
+            full_image = full_image.crop((x0, y0, x1, y1))
+    else:
+        print("Center tile not found, skipping radius marker.")
+
     file_name = get_file_name('full_image', 'png')
     print(f"Saving {file_name}")
     full_image.save(file_name)
@@ -104,17 +144,20 @@ if __name__ == "__main__":
     size = calculate_params_from_block_radius(block_radius, step)
 
     start_time = time.time()
+    args = sys.argv[1:]
+    debug_mode = "--debug" in args
 
-    if "--help" in sys.argv:
-        print("Usage: python dynmap_download.py [-d] [-c] [-s] [-f]")
+    if "--help" in args:
+        print(
+            "Usage: python dynmap_download.py [-d] [-c] [-s] [-f] [--find-center] [--debug]")
         print("Options:")
         print("  -d: Delete existing images")
         print("  -c: Delete small files")
         print("  -s: Skip downloading images")
         print("  -f: Combine images")
+        print("  --debug: Draw debug information on the combined image.")
         sys.exit()
 
-    args = sys.argv[1:]
     if "-d" in args:    # Delete existing images
         files = glob.glob('output/*_*.jpg')
         for f in files:
@@ -134,6 +177,6 @@ if __name__ == "__main__":
     if "-f" in args:    # Combine images
         print("Combining images.")
         start_time = time.time()
-        combine_images()
+        combine_images(block_radius, step, debug=debug_mode)
         print("Done combining images. Took %.2f seconds." %
               (time.time() - start_time))
