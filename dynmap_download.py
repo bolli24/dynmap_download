@@ -6,6 +6,9 @@ from PIL import Image
 from typing import List
 import glob
 import os
+import math
+
+blocks_per_tile = 128
 
 
 def combine_images() -> None:
@@ -39,10 +42,9 @@ def get_file_name(name: str, extension: str, increment=0) -> str:
     return f"{name}_{increment}.{extension}" if increment > 0 else f"{name}.{extension}"
 
 
-def download_image(url: str, size: int, i: int, j: int, step: int) -> None:
-    # http://play.warpedsmp.com:25572/tiles/world/flat/-3_1/zz_-68_44.jpg
-    img_url = f"{url}/tiles/world/flat/{0}_{0}/zz_{(-size + i)}_{(-size + j)}.jpg"
-    img_path = f"output/{i // step}_{j // step}.jpg"
+def download_image(url: str, i: int, j: int, grid_x: int, grid_y: int) -> None:
+    img_url = f"{url}/tiles/world/flat/{0}_{0}/zz_{i}_{j}.jpg"
+    img_path = f"output/{grid_x}_{grid_y}.jpg"
     if (os.path.exists(img_path)):
         print(f"Skipping {img_url} because {img_path} exists")
         return
@@ -56,16 +58,20 @@ def download_image(url: str, size: int, i: int, j: int, step: int) -> None:
         print(f"Error downloading {img_url}")
 
 
-def download_images(url: str, size: int, step: int, offset: int) -> None:
+def download_images(url: str, size: int, step: int) -> None:
+    grid_x = 0
     with ThreadPoolExecutor(max_workers=4) as executor:
-        for i in range(-size + offset*step, 2 * size + 1 + offset*step, step):
-            for j in range(-size + offset*step, 2 * size + 1 + offset*step, step):
-                executor.submit(download_image, url, size, i, j, step)
+        for i in range(-size, size + 1, step):
+            grid_y = 0
+            for j in range(-size, size + 1, step):
+                executor.submit(download_image, url, i, j, grid_x, grid_y)
+                grid_y += 1
+            grid_x += 1
         executor.shutdown(wait=True)
 
 
 def image_count(size: int, step: int) -> int:
-    return ((2 * size + size + 1) // step) ** 2
+    return (((size * 2) // step) + 1) ** 2
 
 
 def print_small_files(folder_path: str) -> None:
@@ -83,12 +89,20 @@ def delete_small_files(folder_path: str) -> None:
             os.remove(filepath)
 
 
+def calculate_params_from_block_radius(block_radius: int, step: int) -> int:
+    """Calculates size and offset from a desired block radius from (0,0)."""
+    tile_radius = math.ceil(block_radius / blocks_per_tile)
+    # Scale the radius by the step to ensure the range covers the full area
+    return tile_radius * step
+
+
 if __name__ == "__main__":
     url = "http://play.warpedsmp.com:25572"
 
-    size = 90
+    block_radius = 3000  # How many blocks from 0,0 to download
     step = 4
-    offset = 12
+    size = calculate_params_from_block_radius(block_radius, step)
+
     start_time = time.time()
 
     if "--help" in sys.argv:
@@ -113,7 +127,7 @@ if __name__ == "__main__":
 
     if not "-s" in args:   # Skip downloading
         print(f"Downloading {image_count(size, step)} images.")
-        download_images(url, size, step, offset)
+        download_images(url, size, step)
         print("Done downloading images. Took %.2f seconds." %
               (time.time() - start_time))
 
